@@ -46,8 +46,7 @@ class AnthropicClient:
         if self.thinking_budget:
             kw["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
             kw["max_tokens"] = self.max_tokens + self.thinking_budget
-        else:
-            kw["temperature"] = self.temperature
+        # the current API has no temperature parameter; sampling defaults apply
         for i in range(4):
             try:
                 r = self.client.messages.create(**kw)
