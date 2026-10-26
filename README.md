@@ -84,7 +84,33 @@ Each episode's full transcript (prompts, model responses, feedback) is saved to
 
 ## Results
 
-See [results/summary.md](results/summary.md).
+30 episodes per tier per model, 3 attempts each, single run (so treat differences under ~10
+points as noise). Full tables including per-family breakdown: [results/summary.md](results/summary.md).
+
+| model | easy | medium | hard | expert | first-try (all) | after feedback (all) | cost |
+|---|---|---|---|---|---|---|---|
+| Claude Opus 5.5 | 100% | 100% | 97% | 77% | 84% | 93% | $5.43 |
+| Claude Fable 5.1* | 100% | 100% | 90% | 69% | 84% | 91% | $15.17 |
+| Claude Sonnet 5.5 | 100% | 100% | 87% | 60% | 75% | 87% | $3.85 |
+| Claude Haiku 5.5 | 100% | 100% | 63% | 27% | 62% | 72% | $0.29 |
+| Gemma 4 31B (local vLLM) | 100% | 100% | 50% | 37% | 57% | 72% | $0 |
+
+\* Fable hit the $15 per-model spend cap after 116 episodes, so its expert tier is n=26.
+
+Things I took from this:
+
+- **Easy and medium are saturated** for every model, including a 31B open model. Single-rule
+  ARC-style tasks are no longer a test of anything. The signal is entirely in composed rules
+  (hard = 2 rules, expert = 3), which is also the direction a curriculum would need to go.
+- **Feedback helps the weaker models most.** Per-cell feedback plus two more attempts lifts
+  Gemma by 15 points and Haiku by 10, but Fable by only 7. The env's multi-turn design makes
+  this measurable; a single-shot benchmark can't see it.
+- **The failure modes are legible.** Gravity, translate and flip/rotate are the worst families for
+  small models (30-40% for Gemma and Haiku) even though they are trivial to state, while
+  region-based rules (fill, hollow, denoise) are fine. Reading the transcripts, the small models
+  describe the rule correctly and then make off-by-one errors while writing the grid.
+- Cell accuracy on failed expert tasks is 0.6-0.8, so "almost right" is common; a reward with
+  partial credit would be dense enough for RL.
 
 ## Notes / things I'd do next
 
