@@ -11,6 +11,12 @@ measure something a single-shot eval can't: how well a model uses feedback.
 
 ## What a task looks like
 
+<p float="left">
+<img src="docs/sample_easy.svg" width="30%"/> <img src="docs/sample_medium.svg" width="30%"/> <img src="docs/sample_hard.svg" width="34%"/>
+</p>
+
+The rule is only shown here for illustration; the model never sees it.
+
 ```
 Example 1 input:          Example 1 output:
 0 0 3 0 4 0 0             3 4 0 0 0 0 0
