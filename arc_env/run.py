@@ -9,8 +9,10 @@ from .env import ArcEnv
 from .agent import run_episode
 
 
-def run_model(name, difficulties, episodes, attempts, workers, out_dir, seed0):
+def run_model(name, difficulties, episodes, attempts, workers, out_dir, seed0, max_cost=15.0):
     client = get_client(name)
+    pin, pout = MODELS[name][1]
+    cost = 0.0
     rows = []
     jobs = [(d, seed0 + i) for d in difficulties for i in range(episodes)]
 
@@ -34,6 +36,12 @@ def run_model(name, difficulties, episodes, attempts, workers, out_dir, seed0):
             r = fut.result()
             rows.append(r)
             f.write(json.dumps(r) + "\n"); f.flush()
+            cost += r["usage"]["in"] / 1e6 * pin + r["usage"]["out"] / 1e6 * pout
+            if cost > max_cost:
+                print(f"[{name}] spend cap ${max_cost} hit after {i} episodes, cancelling the rest", flush=True)
+                for fu in futs:
+                    fu.cancel()
+                break
             if i % 5 == 0 or i == len(jobs):
                 solved = sum(x["solved"] for x in rows)
                 print(f"[{name}] {i}/{len(jobs)} solved={solved} ({time.time()-t0:.0f}s)", flush=True)
@@ -112,10 +120,11 @@ def main():
     ap.add_argument("--seed0", type=int, default=1000)
     ap.add_argument("--out", default="results")
     ap.add_argument("--summary-only", action="store_true")
+    ap.add_argument("--max-cost", type=float, default=15.0, help="USD cap per model run")
     a = ap.parse_args()
     if not a.summary_only:
         for m in a.models.split(","):
-            run_model(m, a.difficulties.split(","), a.episodes, a.attempts, a.workers, a.out, a.seed0)
+            run_model(m, a.difficulties.split(","), a.episodes, a.attempts, a.workers, a.out, a.seed0, a.max_cost)
     print(summarize(a.out))
 
 

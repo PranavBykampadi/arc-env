@@ -66,6 +66,7 @@ MODELS = {
     "sonnet-5.5": (lambda: AnthropicClient("claude-sonnet-5-5"), (2.0, 10.0)),
     "opus-5.5": (lambda: AnthropicClient("claude-opus-5-5"), (4.0, 20.0)),
     "sonnet-5.5-think": (lambda: AnthropicClient("claude-sonnet-5-5", thinking_budget=4096), (2.0, 10.0)),
+    "fable-5.1": (lambda: AnthropicClient("claude-fable-5-1"), (10.0, 50.0)),
 }
 
 
