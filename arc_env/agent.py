@@ -72,11 +72,15 @@ def format_task(obs, mode):
 
 
 def extract_block(text, tags):
-    """Last fenced block whose tag is in `tags`. Returns (tag, body) or (None, None)."""
+    """Last fenced block whose tag is in `tags`. Returns (tag, body) or (None, None).
+    An unclosed final fence (response cut off by max_tokens) is accepted up to the end of the text."""
     found = re.findall(r"```(\w*)\s*\n(.*?)```", text, flags=re.S)
     for tag, body in reversed(found):
         if tag in tags:
             return tag, body
+    m = list(re.finditer(r"```(\w*)\s*\n", text))
+    if m and text.count("```") % 2 == 1 and m[-1].group(1) in tags:
+        return m[-1].group(1), text[m[-1].end():]
     return None, None
 
 
