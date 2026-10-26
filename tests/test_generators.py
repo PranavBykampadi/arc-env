@@ -18,7 +18,7 @@ def test_primitive_changes_input(prim):
             assert y.shape == x.shape
 
 
-@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard", "expert"])
 def test_make_task_is_deterministic_and_nontrivial(difficulty):
     for seed in range(30):
         t1 = make_task(seed, difficulty)
@@ -56,3 +56,8 @@ def test_env_feedback_and_reward():
     assert obs["feedback"]["wrong_mask"].sum() == 1
     obs, r, done, info = env.step(target)
     assert done and info["solved"] and abs(r - 0.7) < 1e-9
+
+
+def test_expert_tier_is_three_deep():
+    fams = [make_task(s, "expert").families for s in range(20)]
+    assert all(len(f) == 3 for f in fams)

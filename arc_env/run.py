@@ -59,7 +59,7 @@ def summarize(out_dir):
     for r in rows:
         by[(r["model"], r["difficulty"])].append(r)
     models = sorted({m for m, _ in by})
-    diffs = [d for d in ["easy", "medium", "hard"] if any((m, d) in by for m in models)]
+    diffs = [d for d in ["easy", "medium", "hard", "expert"] if any((m, d) in by for m in models)]
 
     lines = ["# Results", "", "Solve rate = solved within 3 attempts. First-try = solved on attempt 1. "
              "Cell acc = best per-cell accuracy over attempts (0 when shape wrong). Cost uses list prices.", ""]

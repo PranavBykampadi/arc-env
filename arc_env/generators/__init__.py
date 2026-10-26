@@ -6,9 +6,9 @@ from .primitives import ALL, Primitive
 
 GENERATORS = {p.name: p for p in ALL}
 
-TIER_ORDER = {"easy": 0, "medium": 1, "hard": 2}
+TIER_ORDER = {"easy": 0, "medium": 1, "hard": 2, "expert": 3}
 
-SIZES = {"easy": (5, 8), "medium": (7, 12), "hard": (9, 15)}
+SIZES = {"easy": (5, 8), "medium": (7, 12), "hard": (9, 15), "expert": (10, 16)}
 
 
 @dataclass
@@ -30,24 +30,27 @@ class Task:
 
 
 class Composed:
-    """Apply primitive A then B. Only shape-preserving ones compose."""
+    """Apply a chain of primitives in order. All but the last must be shape-preserving,
+    since each one's output is the next one's input and only the first samples the input."""
 
-    def __init__(self, a: Primitive, b: Primitive):
-        self.a, self.b = a, b
-        self.name = f"{a.name}+{b.name}"
-        self.shape_preserving = True
+    def __init__(self, *prims: Primitive):
+        self.prims = prims
+        self.name = "+".join(p.name for p in prims)
+        self.shape_preserving = all(p.shape_preserving for p in prims)
 
     def sample_params(self, rng):
-        return {"a": self.a.sample_params(rng), "b": self.b.sample_params(rng)}
+        return {"chain": [p.sample_params(rng) for p in self.prims]}
 
     def sample_input(self, rng, size, params):
-        return self.a.sample_input(rng, size, params["a"])
+        return self.prims[0].sample_input(rng, size, params["chain"][0])
 
     def apply(self, g, params):
-        return self.b.apply(self.a.apply(g, params["a"]), params["b"])
+        for p, pp in zip(self.prims, params["chain"]):
+            g = p.apply(g, pp)
+        return g
 
     def describe(self, params):
-        return f"{self.a.describe(params['a'])} then {self.b.describe(params['b'])}"
+        return " then ".join(p.describe(pp) for p, pp in zip(self.prims, params["chain"]))
 
 
 def _candidates(difficulty):
@@ -57,10 +60,18 @@ def _candidates(difficulty):
 
 def _pick_generator(rng, difficulty):
     cands = _candidates(difficulty)
+    sp = [p for p in cands if p.shape_preserving]
     if difficulty == "hard" and rng.random() < 0.7:
-        sp = [p for p in cands if p.shape_preserving]
         a, b = rng.choice(len(sp), size=2, replace=False)
         return Composed(sp[a], sp[b])
+    if difficulty == "expert":
+        # three rules in a row; 30% of the time the last one changes the grid shape
+        idx = rng.choice(len(sp), size=3, replace=False)
+        chain = [sp[i] for i in idx]
+        if rng.random() < 0.3:
+            sc = [p for p in cands if not p.shape_preserving]
+            chain[-1] = sc[int(rng.integers(len(sc)))]
+        return Composed(*chain)
     return cands[int(rng.integers(len(cands)))]
 
 
