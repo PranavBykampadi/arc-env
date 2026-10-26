@@ -1,0 +1,100 @@
+"""Task generation: pick primitives by difficulty, optionally compose two, build train/test pairs."""
+import numpy as np
+from dataclasses import dataclass, field
+from typing import List, Tuple
+from .primitives import ALL, Primitive
+
+GENERATORS = {p.name: p for p in ALL}
+
+TIER_ORDER = {"easy": 0, "medium": 1, "hard": 2}
+
+SIZES = {"easy": (5, 8), "medium": (7, 12), "hard": (9, 15)}
+
+
+@dataclass
+class Task:
+    train: List[Tuple[np.ndarray, np.ndarray]]
+    test_input: np.ndarray
+    test_output: np.ndarray
+    rule: str  # hidden description, for analysis only
+    difficulty: str
+    seed: int
+    families: List[str] = field(default_factory=list)
+
+    def to_json(self):
+        return {
+            "train": [{"input": a.tolist(), "output": b.tolist()} for a, b in self.train],
+            "test": {"input": self.test_input.tolist(), "output": self.test_output.tolist()},
+            "rule": self.rule, "difficulty": self.difficulty, "seed": self.seed, "families": self.families,
+        }
+
+
+class Composed:
+    """Apply primitive A then B. Only shape-preserving ones compose."""
+
+    def __init__(self, a: Primitive, b: Primitive):
+        self.a, self.b = a, b
+        self.name = f"{a.name}+{b.name}"
+        self.shape_preserving = True
+
+    def sample_params(self, rng):
+        return {"a": self.a.sample_params(rng), "b": self.b.sample_params(rng)}
+
+    def sample_input(self, rng, size, params):
+        return self.a.sample_input(rng, size, params["a"])
+
+    def apply(self, g, params):
+        return self.b.apply(self.a.apply(g, params["a"]), params["b"])
+
+    def describe(self, params):
+        return f"{self.a.describe(params['a'])} then {self.b.describe(params['b'])}"
+
+
+def _candidates(difficulty):
+    lvl = TIER_ORDER[difficulty]
+    return [p for p in ALL if TIER_ORDER[p.tier] <= lvl]
+
+
+def _pick_generator(rng, difficulty):
+    cands = _candidates(difficulty)
+    if difficulty == "hard" and rng.random() < 0.7:
+        sp = [p for p in cands if p.shape_preserving]
+        a, b = rng.choice(len(sp), size=2, replace=False)
+        return Composed(sp[a], sp[b])
+    return cands[int(rng.integers(len(cands)))]
+
+
+def _nontrivial(pairs):
+    # every pair must change something, and outputs must not all be identical
+    if any(np.array_equal(a, b) for a, b in pairs):
+        return False
+    outs = [b for _, b in pairs]
+    if all(o.shape == outs[0].shape and np.array_equal(o, outs[0]) for o in outs):
+        return False
+    if any(b.size == 0 or b.shape[0] > 30 or b.shape[1] > 30 for _, b in pairs):
+        return False
+    return True
+
+
+def make_task(seed, difficulty="easy", n_train=3):
+    rng = np.random.default_rng(seed)
+    lo, hi = SIZES[difficulty]
+    for attempt in range(50):
+        gen = _pick_generator(rng, difficulty)
+        params = gen.sample_params(rng)
+        pairs = []
+        ok = True
+        for _ in range(n_train + 1):
+            size = (int(rng.integers(lo, hi + 1)), int(rng.integers(lo, hi + 1)))
+            try:
+                x = gen.sample_input(rng, size, params)
+                y = gen.apply(x, params)
+            except Exception:
+                ok = False
+                break
+            pairs.append((x, y))
+        if ok and _nontrivial(pairs):
+            fams = gen.name.split("+")
+            return Task(train=pairs[:-1], test_input=pairs[-1][0], test_output=pairs[-1][1],
+                        rule=gen.describe(params), difficulty=difficulty, seed=seed, families=fams)
+    raise RuntimeError(f"could not build a task for seed={seed} difficulty={difficulty}")
