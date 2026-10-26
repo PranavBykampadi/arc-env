@@ -14,17 +14,30 @@ SIZES = {"easy": (5, 8), "medium": (7, 12), "hard": (9, 15), "expert": (10, 16)}
 @dataclass
 class Task:
     train: List[Tuple[np.ndarray, np.ndarray]]
-    test_input: np.ndarray
-    test_output: np.ndarray
+    tests: List[Tuple[np.ndarray, np.ndarray]]  # tests[0] is the one shown; the rest stay hidden
     rule: str  # hidden description, for analysis only
     difficulty: str
     seed: int
     families: List[str] = field(default_factory=list)
+    _gen: object = field(default=None, repr=False)
+    _params: dict = field(default_factory=dict, repr=False)
+
+    @property
+    def test_input(self):
+        return self.tests[0][0]
+
+    @property
+    def test_output(self):
+        return self.tests[0][1]
+
+    def apply(self, grid):
+        """Run the hidden rule on an arbitrary grid (used by the active/probe mode)."""
+        return self._gen.apply(np.asarray(grid, dtype=int), self._params)
 
     def to_json(self):
         return {
             "train": [{"input": a.tolist(), "output": b.tolist()} for a, b in self.train],
-            "test": {"input": self.test_input.tolist(), "output": self.test_output.tolist()},
+            "tests": [{"input": a.tolist(), "output": b.tolist()} for a, b in self.tests],
             "rule": self.rule, "difficulty": self.difficulty, "seed": self.seed, "families": self.families,
         }
 
@@ -87,7 +100,7 @@ def _nontrivial(pairs):
     return True
 
 
-def make_task(seed, difficulty="easy", n_train=3):
+def make_task(seed, difficulty="easy", n_train=3, n_test=1):
     rng = np.random.default_rng(seed)
     lo, hi = SIZES[difficulty]
     for attempt in range(50):
@@ -95,7 +108,7 @@ def make_task(seed, difficulty="easy", n_train=3):
         params = gen.sample_params(rng)
         pairs = []
         ok = True
-        for _ in range(n_train + 1):
+        for _ in range(n_train + n_test):
             size = (int(rng.integers(lo, hi + 1)), int(rng.integers(lo, hi + 1)))
             try:
                 x = gen.sample_input(rng, size, params)
@@ -106,6 +119,7 @@ def make_task(seed, difficulty="easy", n_train=3):
             pairs.append((x, y))
         if ok and _nontrivial(pairs):
             fams = gen.name.split("+")
-            return Task(train=pairs[:-1], test_input=pairs[-1][0], test_output=pairs[-1][1],
-                        rule=gen.describe(params), difficulty=difficulty, seed=seed, families=fams)
+            return Task(train=pairs[:n_train], tests=pairs[n_train:],
+                        rule=gen.describe(params), difficulty=difficulty, seed=seed, families=fams,
+                        _gen=gen, _params=params)
     raise RuntimeError(f"could not build a task for seed={seed} difficulty={difficulty}")

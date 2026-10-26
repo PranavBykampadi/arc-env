@@ -9,7 +9,18 @@ from .env import ArcEnv
 from .agent import run_episode
 
 
-def run_model(name, difficulties, episodes, attempts, workers, out_dir, seed0, max_cost=15.0):
+def wilson(k, n, z=1.96):
+    if n == 0:
+        return (0.0, 0.0)
+    p = k / n
+    den = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / den
+    h = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / den
+    return (max(0.0, c - h), min(1.0, c + h))
+
+
+def run_model(name, difficulties, episodes, attempts, workers, out_dir, seed0, max_cost=15.0, mode="passive",
+              reward_mode="sparse"):
     client = get_client(name)
     pin, pout = MODELS[name][1]
     cost = 0.0
@@ -17,12 +28,13 @@ def run_model(name, difficulties, episodes, attempts, workers, out_dir, seed0, m
     jobs = [(d, seed0 + i) for d in difficulties for i in range(episodes)]
 
     def one(d, seed):
-        env = ArcEnv(d, max_attempts=attempts)
+        env = ArcEnv(d, max_attempts=attempts, mode=mode, reward_mode=reward_mode)
         try:
             r = run_episode(client, env, seed)
         except Exception as e:
-            r = {"seed": seed, "difficulty": d, "error": repr(e), "solved": False, "attempts": 0,
-                 "reward": 0.0, "first_try": False, "best_cell_acc": 0.0, "usage": {"in": 0, "out": 0},
+            r = {"seed": seed, "difficulty": d, "mode": mode, "error": repr(e), "solved": False, "attempts": 0,
+                 "probes": 0, "reward": 0.0, "first_try": False, "best_cell_acc": 0.0, "usage": {"in": 0, "out": 0},
+                 "final_hidden_pass": None, "best_hidden_pass": None,
                  "rule": env.task.rule if env.task else "?", "families": env.task.families if env.task else []}
         r["model"] = name
         return r
@@ -61,9 +73,12 @@ def summarize(out_dir):
     models = sorted({m for m, _ in by})
     diffs = [d for d in ["easy", "medium", "hard", "expert"] if any((m, d) in by for m in models)]
 
-    lines = ["# Results", "", "Solve rate = solved within 3 attempts. First-try = solved on attempt 1. "
-             "Cell acc = best per-cell accuracy over attempts (0 when shape wrong). Cost uses list prices.", ""]
-    lines.append("| model | " + " | ".join(f"{d} solve / first-try / cell acc" for d in diffs) + " | n | $ |")
+    mode = rows[0].get("mode", "passive") if rows else "passive"
+    lines = [f"# Results ({mode} mode)", "", "Solve rate = solved within the attempt limit, with a 95% Wilson interval. "
+             "First-try = solved on the first submission. Reward = mean episode reward "
+             "(passive: attempt-decayed solve; active: solved x min(1, 4/actions)^2; program: hidden-test pass fraction of the final submission). "
+             "Cost uses list prices.", ""]
+    lines.append("| model | " + " | ".join(f"{d} solve [95% CI] / first-try / reward" for d in diffs) + " | n | $ |")
     lines.append("|---|" + "---|" * (len(diffs) + 2))
     for m in models:
         cells = []
@@ -75,11 +90,25 @@ def summarize(out_dir):
                 cells.append("-"); continue
             n += len(rs)
             cost += sum(r["usage"]["in"] for r in rs) / 1e6 * pin + sum(r["usage"]["out"] for r in rs) / 1e6 * pout
-            sr = sum(r["solved"] for r in rs) / len(rs)
+            k = sum(r["solved"] for r in rs); lo, hi = wilson(k, len(rs))
             ft = sum(r["first_try"] for r in rs) / len(rs)
-            ca = sum(r["best_cell_acc"] for r in rs) / len(rs)
-            cells.append(f"{sr:.0%} / {ft:.0%} / {ca:.2f}")
+            rw = sum(r["reward"] for r in rs) / len(rs)
+            cells.append(f"{k/len(rs):.0%} [{lo:.0%}-{hi:.0%}] / {ft:.0%} / {rw:.2f}")
         lines.append(f"| {m} | " + " | ".join(cells) + f" | {n} | {cost:.2f} |")
+    if mode == "active":
+        lines += ["", "## Actions used (probes + submissions), solved episodes only", "", "| model | mean probes | mean actions | solved with <=2 probes |", "|---|---|---|---|"]
+        for m in models:
+            rs = [r for (mm, _), v in by.items() if mm == m for r in v if r["solved"]]
+            if rs:
+                lines.append(f"| {m} | {sum(r['probes'] for r in rs)/len(rs):.1f} | {sum(r['probes']+r['attempts'] for r in rs)/len(rs):.1f} | "
+                             f"{sum(r['probes']<=2 for r in rs)/len(rs):.0%} |")
+    if mode == "program":
+        lines += ["", "## Generalization: hidden-test pass fraction", "", "| model | final submission (mean) | best attempt (mean) | all-hidden-pass rate |", "|---|---|---|---|"]
+        for m in models:
+            rs = [r for (mm, _), v in by.items() if mm == m for r in v if r.get("final_hidden_pass") is not None]
+            if rs:
+                lines.append(f"| {m} | {sum(r['final_hidden_pass'] for r in rs)/len(rs):.2f} | {sum(r['best_hidden_pass'] for r in rs)/len(rs):.2f} | "
+                             f"{sum(r['solved'] for r in rs)/len(rs):.0%} |")
 
     # feedback helps? solved on attempt 2 or 3
     lines += ["", "## Does feedback help?", "", "| model | first-try | by attempt 2 | by attempt 3 |", "|---|---|---|---|"]
@@ -121,11 +150,15 @@ def main():
     ap.add_argument("--out", default="results")
     ap.add_argument("--summary-only", action="store_true")
     ap.add_argument("--max-cost", type=float, default=15.0, help="USD cap per model run")
+    ap.add_argument("--mode", default="passive", choices=["passive", "active", "program"])
+    ap.add_argument("--reward-mode", default="sparse", choices=["sparse", "shaped"])
     a = ap.parse_args()
+    out = a.out if a.mode == "passive" else os.path.join(a.out, a.mode)
     if not a.summary_only:
         for m in a.models.split(","):
-            run_model(m, a.difficulties.split(","), a.episodes, a.attempts, a.workers, a.out, a.seed0, a.max_cost)
-    print(summarize(a.out))
+            run_model(m, a.difficulties.split(","), a.episodes, a.attempts, a.workers, out, a.seed0, a.max_cost,
+                      mode=a.mode, reward_mode=a.reward_mode)
+    print(summarize(out))
 
 
 if __name__ == "__main__":
