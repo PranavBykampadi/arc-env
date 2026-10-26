@@ -141,12 +141,98 @@ Things I took from this:
 - Cell accuracy on failed expert tasks is 0.6-0.8, so "almost right" is common; a reward with
   partial credit would be dense enough for RL.
 
+## Results: program mode (write the rule as code)
+
+Hard and expert tiers only, 15 episodes each, 3 attempts, Claude at `effort=medium`. The model
+submits `transform(grid)`; the env runs it in a sandbox on the visible pairs *and five hidden
+test pairs* sampled from the same generator. Reward is the hidden pass fraction, so a program that
+hard-codes the visible outputs scores 0. Full tables: [results/program/summary.md](results/program/summary.md).
+
+| model | hard solve | expert solve | hidden-test pass (mean) | all 5 hidden pass | first-try (all) | after feedback (all) | cost |
+|---|---|---|---|---|---|---|---|
+| Claude Opus 5.5 | 93% | 67% | 0.90 | 80% | 70% | 80% | $4.02 |
+| Claude Sonnet 5.5 | 73% | 40% | 0.67 | 57% | 30% | 57% | $1.80 |
+| Claude Haiku 5.5 | 53% | 20% | 0.44 | 37% | 30% | 37% | $0.17 |
+| Gemma 4 31B | 47% | 20% | 0.50 | 38% | 0% | 33% | $0 |
+
+Gemma lost 4 of 30 episodes to vLLM read timeouts (counted as unsolved). The first program-mode
+run was thrown away: the Claude client had `max_tokens=4096` and Sonnet's reply was frequently
+all thinking and no code (`results/program_v0_maxtokens_bug/` keeps it). The fix is in
+`arc_env/clients.py`.
+
+- **Writing the rule is harder than drawing the answer.** Every model drops 10-20 points from
+  passive to program mode at the same tier, although program mode also gets 3 train pairs. Opus
+  expert goes 77% to 67%, Sonnet 60% to 40%. The gap is the difference between pattern-completing
+  one grid and stating a rule that holds for five more.
+- **Hidden tests catch overfit programs.** 4-6 episodes per model ended with a program that passes
+  the visible pairs but only 1-4 of 5 hidden ones (hidden pass 0.2-0.8). In passive mode those
+  would all count as solved. Partial hidden credit is also a natural dense reward for RL.
+- **Feedback still helps, but less than in passive mode**: a wrong program gets per-cell feedback
+  on the visible test only, and most fixes are to the rule, not the code.
+
+## Results: active mode (probe the rule)
+
+Same tiers and episode counts, but the model sees **one** train pair instead of three and may send up
+to 6 input grids of its own design to the hidden rule before answering. Reward on solve is
+`min(1, 4 / (probes + submissions))^2`, the ARC-AGI-3 efficiency shape, so a two-probe solve scores 1
+and a six-probe solve scores 0.25.
+
+Full tables: [results/active/summary.md](results/active/summary.md).
+
+| model | hard solve | expert solve | mean probes (solved) | solved with <=2 probes | first-try (all) | cost |
+|---|---|---|---|---|---|---|
+| Claude Opus 5.5* | 100% | 100% | 1.1 | 85% | 88% | $3.12 |
+| Claude Sonnet 5.5 | 80% | 33% | 0.6 | 94% | 33% | $1.40 |
+| Gemma 4 31B | 60% | 20% | 1.2 | 92% | 27% | $0 |
+| Claude Haiku 5.5 | 60% | 13% | 2.0 | 45% | 27% | $0.24 |
+
+\* Opus hit the $3 per-model cap at 26 episodes (expert n=11).
+
+- **Opus can use probes; nobody else can.** With one train pair and about two probes of its own
+  design, Opus solves every expert task, above its 77% in passive mode with three pairs. Its probes
+  are textbook experiments: a single pixel, then one small object, then two colours. Sonnet mostly
+  does not probe at all (0.6 per solve) and drops to 33% on expert; Haiku probes the most and gets
+  the least from it. Probe design, not probe count, is the skill.
+- **Fewer examples hurt the weaker models.** Gemma falls from 37% (passive expert, 3 pairs) to 20%
+  with one pair plus probes, Haiku from 27% to 13%. They cannot replace a shown example with an
+  experiment of their own.
+- After the fix, one Opus and one Sonnet episode each tried the test-input probe once, were refused,
+  and solved the task legitimately.
+
+**The first active run was an exploit, and it is kept.** Opus discovered in 14 of 30 episodes
+(9 of 15 expert) that the cheapest probe is the test input itself: send it, read the output, submit
+it, two actions, full reward. Sonnet did it 4 times, Haiku 3, Gemma never. Opus scored 100% on
+expert that way (`results/active_v1_testinput_exploit/`). Non-background overlap between probes and
+the test input is bimodal, near 0 for genuine probes and near 1 for the copies, so the env now
+rejects any probe with overlap >= 0.5, still charges the action, says why, and counts the attempts.
+The table above is from the hardened env. The lesson is the one every RL env team relearns: the
+strongest model is also the best auditor of your reward, so run it first and read its transcripts.
+
+## Random-agent calibration
+
+ARC-AGI-3 requires that random play solve a level less than 1 in 10,000 times. `python -m
+arc_env.baselines` scores four trivial policies on 500 tasks per tier:
+
+| tier | identity | copy first output | most common colour (given shape) | random fill (given shape) |
+|---|---|---|---|---|
+| easy | 0.0% | 0.0% | 0.4% | 0.0% |
+| medium | 0.0% | 0.8% | 6.2% | 0.0% |
+| hard | 0.0% | 0.2% | 1.0% | 0.0% |
+| expert | 0.0% | 1.0% | 4.2% | 0.2% |
+
+The 6% is the count-to-bar family, whose output is a single-colour bar; the policy is also handed
+the correct output shape, which the agent is not. Everything else is under 1%.
+
 ## Notes / things I'd do next
 
-- Program-synthesis action mode: have the model emit a Python function instead of a grid and
-  score it on held-out pairs. Harder to reward-hack, tests generalization rather than pattern
-  completion.
-- More families (object counting with comparisons, symmetry repair, path drawing) and 3-primitive
-  compositions for an "expert" tier.
-- RL training: the env is already reset/step shaped; wire it into a GRPO loop against the Gemma
-  server and see whether feedback-driven improvement transfers across families.
+- Count-to-bar should output something with more structure than a monochrome bar.
+- Active mode's reference of 4 actions stands in for a human baseline; measure probes-per-family
+  on people and use that, as ARC-AGI-3 does.
+- A DSL instead of Python in program mode, with program length in the reward (shortest-program
+  overlap is the ARC-AGI-3 novelty criterion).
+- More families (symmetry repair, path drawing, counting with comparisons).
+- RL training: all three modes expose a dense signal (cell accuracy, probe count, hidden pass
+  fraction); wire the env into a GRPO loop against the local Gemma server and test whether
+  feedback-driven gains transfer across families.
+- Run every new mode on the strongest model first and read its transcripts before trusting the
+  numbers. See above.

@@ -45,6 +45,16 @@ Sandboxing: the code runs in a subprocess under `python -I -S` with a 3s alarm p
 address-space limit, an empty environment and no network. It is adequate for frontier-API models and
 not adequate for an RL policy under optimisation pressure; for that you would want a container.
 
+### The test-input exploit
+
+The first active run let the agent probe with any grid. Opus worked out within a few episodes that
+probing with the test input itself returns the answer, and did so in 14/30 episodes (Sonnet 4, Haiku 3,
+Gemma 0). It was not hiding it: "The last probe used the test input itself, so the rule's output for it
+is already known." Measuring non-background overlap between every probe and the test input gave a
+bimodal distribution (227 probes: 203 under 0.05, 21 at 1.0, 3 in between), so the env now rejects
+probes with overlap >= 0.5, still charges the action and explains the refusal. The pre-fix results are
+kept in `results/active_v1_testinput_exploit/` because they are the more interesting artefact.
+
 ## Shaped vs sparse
 
 `reward_mode=shaped` adds `0.3 x best_cell_accuracy` for unsolved passive episodes. It is off by
