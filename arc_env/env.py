@@ -21,11 +21,13 @@ MODES = ("passive", "active", "program")
 
 class ArcEnv:
     def __init__(self, difficulty="easy", max_attempts=3, reveal_shape=True, n_train=3, mode="passive",
-                 reward_mode="sparse", max_probes=6, active_train_pairs=1, n_hidden_tests=5):
+                 reward_mode="sparse", max_probes=6, active_train_pairs=1, n_hidden_tests=5,
+                 probe_overlap_limit=0.5):
         assert mode in MODES
         self.difficulty, self.max_attempts, self.reveal_shape = difficulty, max_attempts, reveal_shape
         self.n_train, self.mode, self.reward_mode = n_train, mode, reward_mode
         self.max_probes, self.active_train_pairs, self.n_hidden_tests = max_probes, active_train_pairs, n_hidden_tests
+        self.probe_overlap_limit = probe_overlap_limit
         self.task: Task = None
         self.attempt = 0
         self.probes = 0
@@ -35,7 +37,7 @@ class ArcEnv:
     def reset(self, seed):
         n_test = self.n_hidden_tests if self.mode == "program" else 1  # program: shown test input is one of the hidden-output tests
         self.task = make_task(seed, self.difficulty, self.n_train, n_test=n_test)
-        self.attempt, self.probes, self.history = 0, 0, []
+        self.attempt, self.probes, self.history, self.test_probe_rejections = 0, 0, [], 0
         shown = self.task.train[:self.active_train_pairs] if self.mode == "active" else self.task.train
         return {"train": shown, "test_input": self.task.test_input, "attempts_left": self.max_attempts,
                 "probes_left": self.max_probes if self.mode == "active" else 0, "feedback": None}
@@ -46,6 +48,15 @@ class ArcEnv:
                 "probes_left": self.max_probes - self.probes, "feedback": fb}
 
     # ----- active mode: probe the hidden rule -----
+    @staticmethod
+    def _overlap(a, b):
+        """Fraction of non-background cells (in either grid) that are identical. 1.0 = same grid, ~0 = unrelated."""
+        a, b = np.asarray(a), np.asarray(b)
+        if a.shape != b.shape:
+            return 0.0
+        nz = (a != 0) | (b != 0)
+        return float(((a == b) & nz).sum() / nz.sum()) if nz.any() else 0.0
+
     def probe(self, grid):
         """Apply the hidden rule to a grid the agent designed. Costs one action. Returns (obs, reward, done, info)."""
         assert self.mode == "active", "probe() only in active mode"
@@ -57,6 +68,10 @@ class ArcEnv:
         fb = {"probe": True, "solved": False, "input": grid}
         if grid.ndim != 2 or grid.size == 0 or grid.shape[0] > 30 or grid.shape[1] > 30 or (grid < 0).any() or (grid > 9).any():
             fb["error"] = "probe grid must be 2D, at most 30x30, values 0-9"
+        elif self._overlap(grid, self.task.test_input) >= self.probe_overlap_limit:
+            # Opus found this hole in 14/30 episodes: probe with the test input itself and submit the answer.
+            fb["error"] = "probe rejected: it copies the test input (or most of it). Design your own inputs."
+            self.test_probe_rejections += 1
         else:
             try:
                 out = self.task.apply(grid)

@@ -96,12 +96,13 @@ def summarize(out_dir):
             cells.append(f"{k/len(rs):.0%} [{lo:.0%}-{hi:.0%}] / {ft:.0%} / {rw:.2f}")
         lines.append(f"| {m} | " + " | ".join(cells) + f" | {n} | {cost:.2f} |")
     if mode == "active":
-        lines += ["", "## Actions used (probes + submissions), solved episodes only", "", "| model | mean probes | mean actions | solved with <=2 probes |", "|---|---|---|---|"]
+        lines += ["", "## Actions used (probes + submissions), solved episodes only", "", "| model | mean probes | mean actions | solved with <=2 probes | episodes that tried to probe with the test input |", "|---|---|---|---|---|"]
         for m in models:
-            rs = [r for (mm, _), v in by.items() if mm == m for r in v if r["solved"]]
+            allr = [r for (mm, _), v in by.items() if mm == m for r in v]
+            rs = [r for r in allr if r["solved"]]
             if rs:
                 lines.append(f"| {m} | {sum(r['probes'] for r in rs)/len(rs):.1f} | {sum(r['probes']+r['attempts'] for r in rs)/len(rs):.1f} | "
-                             f"{sum(r['probes']<=2 for r in rs)/len(rs):.0%} |")
+                             f"{sum(r['probes']<=2 for r in rs)/len(rs):.0%} | {sum(1 for r in allr if r.get('test_probe_rejections'))}/{len(allr)} |")
     if mode == "program":
         lines += ["", "## Generalization: hidden-test pass fraction", "", "| model | final submission (mean) | best attempt (mean) | all-hidden-pass rate |", "|---|---|---|---|"]
         for m in models:

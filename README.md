@@ -9,6 +9,14 @@ It is an *environment*, not a benchmark: the model gets per-cell feedback and mu
 and the reward decays with attempts. That makes it directly usable for RL, and it also lets you
 measure something a single-shot eval can't: how well a model uses feedback.
 
+Three action modes share the same task generators (details in [DESIGN.md](DESIGN.md)):
+
+- **passive**: see train pairs, submit the test output grid, get per-cell feedback. The ARC format.
+- **active**: see fewer train pairs, but you may send your own input grids to the hidden rule and
+  observe the outputs before answering. Reward penalises wasted probes (ARC-AGI-3 style efficiency).
+- **program**: submit a Python `transform(grid)` instead of a grid. It runs in a sandbox and is
+  scored on five hidden test pairs, so memorising the visible pairs scores nothing.
+
 ## What a task looks like
 
 <p float="left">
@@ -59,11 +67,20 @@ and is deterministic from `(seed, difficulty)`.
 ```python
 from arc_env import ArcEnv
 
-env = ArcEnv(difficulty="medium", max_attempts=3)
+env = ArcEnv(difficulty="medium", max_attempts=3)            # mode="passive" (default)
 obs = env.reset(seed=42)        # obs["train"]: list of (input, output); obs["test_input"]
 obs, reward, done, info = env.step(my_grid)
 # obs["feedback"]: shape_ok, cell_acc, wrong_mask (grid of 1s where you were wrong)
 # reward: 1.0 on first-try solve, 0.85 on second, 0.70 on third, else 0
+
+env = ArcEnv(difficulty="hard", mode="active", max_probes=6, active_train_pairs=1)
+obs = env.probe(my_input_grid)  # returns the hidden rule applied to your grid
+# reward on solve: min(1, 4 / (probes + submissions)) ** 2
+
+env = ArcEnv(difficulty="hard", mode="program", n_hidden_tests=5)
+obs, reward, done, info = env.step("def transform(grid):\n    ...")
+# reward: fraction of hidden tests passed, times the attempt decay
+# reward_mode="shaped" adds up to 0.3 * cell_acc partial credit on failed attempts (any mode)
 ```
 
 ## Running the eval
@@ -72,17 +89,26 @@ obs, reward, done, info = env.step(my_grid)
 uv venv && source .venv/bin/activate && uv pip install -e .
 source ~/.secrets/anthropic.env           # for Claude models
 python -m arc_env.run --models gemma-4-31b,haiku-5.5,sonnet-5.5 --episodes 30
+python -m arc_env.run --mode program --difficulties hard,expert --episodes 15 --max-cost 3.5
+python -m arc_env.run --mode active  --difficulties hard,expert --episodes 15 --max-cost 3
 python -m arc_env.run --summary-only      # rebuild results/summary.md from raw jsonl
+python -m arc_env.baselines               # random-agent calibration table
 ```
 
 Models: `gemma-4-31b` (any OpenAI-compatible endpoint, default is a local vLLM on :5151),
-`haiku-5.5`, `sonnet-5.5`, `opus-5.5`, `sonnet-5.5-think` (Anthropic API). Add more in
-`arc_env/clients.py`.
+`haiku-5.5`, `sonnet-5.5`, `opus-5.5`, `sonnet-5.5-high`, `fable-5.1` (Anthropic API). Add more
+in `arc_env/clients.py`. `--max-cost` is a per-model USD cap at list price; the run stops
+dispatching new episodes once it is hit. Non-passive modes write to `results/<mode>/`.
 
 Each episode's full transcript (prompts, model responses, feedback) is saved to
 `results/raw/<model>.jsonl` so failures can be read, not just counted.
 
-## Results
+Claude calls pin `effort="medium"` with a 16k token budget and retry once at low effort if the
+reply is all thinking and no answer. The passive run below predates that and used the API
+defaults (Sonnet high, Opus/Haiku medium), so Sonnet's passive numbers are slightly flattered
+relative to the other two modes.
+
+## Results: passive mode
 
 30 episodes per tier per model, 3 attempts each, single run (so treat differences under ~10
 points as noise). Full tables including per-family breakdown: [results/summary.md](results/summary.md).

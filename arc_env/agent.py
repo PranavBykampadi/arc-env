@@ -39,7 +39,8 @@ or your answer for the test input:
 
 Every probe and every answer counts as an action and your score drops with the square of the action count,
 so probe only when it buys information, and answer as soon as you are confident. You have a limited number of
-probes and answer attempts; wrong answers get per-cell feedback."""
+probes and answer attempts; wrong answers get per-cell feedback. Probes that copy the test input (or most of
+it) are rejected and still cost an action: the point is to work out the rule, not to look up the answer."""
 
 SYSTEM_PROGRAM = """You are solving ARC-style grid puzzles by writing code. Each puzzle has a hidden transformation
 rule shown through a few input->output examples. Write a Python function
@@ -160,6 +161,7 @@ def run_episode(client, env: ArcEnv, seed, verbose=False, max_turns=14):
                 "families": env.task.families}
     return {"seed": seed, "difficulty": env.difficulty, "mode": mode, "rule": info["rule"], "families": info["families"],
             "solved": bool(info.get("solved")), "attempts": env.attempt, "probes": env.probes, "reward": reward,
+            "test_probe_rejections": getattr(env, "test_probe_rejections", 0),
             "first_try": bool(subs and subs[0]["solved"]),
             "best_cell_acc": max([t["cell_acc"] for t in subs], default=0.0),
             "final_hidden_pass": (subs[-1]["hidden_pass"] if subs and mode == "program" else None),

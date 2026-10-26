@@ -117,3 +117,18 @@ def test_shaped_reward_gives_partial_credit():
     almost = env.task.test_output.copy(); almost[0, 0] = (almost[0, 0] + 1) % 10
     obs, r, done, info = env.step(almost)
     assert done and 0 < r <= 0.3
+
+
+def test_active_mode_rejects_probing_with_the_test_input():
+    env = ArcEnv("hard", mode="active", max_probes=3)
+    obs = env.reset(seed=5)
+    ti = np.asarray(obs["test_input"])
+    obs, r, done, info = env.probe(ti)
+    assert "rejected" in obs["feedback"]["error"] and "output" not in obs["feedback"]
+    assert obs["probes_left"] == 2  # still costs an action
+    near = ti.copy(); near.flat[0] = (near.flat[0] + 1) % 10
+    obs, r, done, info = env.probe(near)
+    assert "rejected" in obs["feedback"]["error"]
+    obs, r, done, info = env.probe(np.zeros((3, 3), dtype=int))
+    assert obs["feedback"].get("error") is None or "rejected" not in obs["feedback"]["error"]
+    assert env.test_probe_rejections == 2
