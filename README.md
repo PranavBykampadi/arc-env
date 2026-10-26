@@ -105,10 +105,13 @@ Things I took from this:
 - **Feedback helps the weaker models most.** Per-cell feedback plus two more attempts lifts
   Gemma by 15 points and Haiku by 10, but Fable by only 7. The env's multi-turn design makes
   this measurable; a single-shot benchmark can't see it.
-- **The failure modes are legible.** Gravity, translate and flip/rotate are the worst families for
-  small models (30-40% for Gemma and Haiku) even though they are trivial to state, while
-  region-based rules (fill, hollow, denoise) are fine. Reading the transcripts, the small models
-  describe the rule correctly and then make off-by-one errors while writing the grid.
+- **The failure modes are legible.** Every single-rule task (easy/medium) was solved by every
+  model, so the per-family numbers above 0 failures all come from composed tasks. Reading the
+  failed transcripts: the models do not mis-execute a rule they stated correctly, they fail to
+  identify the composition at all. Gemma confidently describes a wrong rule; Haiku says outright
+  that it "couldn't pin down the rule" and submits a placeholder. Geometric primitives
+  (gravity, translate, rotate) are the ones most often lost inside a composition, presumably
+  because they move every cell and hide the other rule's signature.
 - Cell accuracy on failed expert tasks is 0.6-0.8, so "almost right" is common; a reward with
   partial credit would be dense enough for RL.
 
